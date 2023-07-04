@@ -1,0 +1,142 @@
+import torch
+import torch.nn as nn
+import os
+import time
+import random
+from PIL import Image
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.autograd import Variable
+import numpy as np
+
+
+class decom_net(torch.nn.Module):
+    def __init__(self):
+        super(decom_net, self).__init__()
+        self.conv1_decomnet = torch.nn.Sequential()
+        # (96 - 3 + 2)/1 +1 = 96
+        self.conv1_decomnet.add_module('conv1', torch.nn.Conv2d(in_channels=3,
+                                                                out_channels=32, kernel_size=3, stride=1, padding=1))
+        
+        self.conv1_decomnet.add_module('relu1', torch.nn.LeakyReLU(negative_slope=0.2, inplace=True))
+        # (96 - 2 + 0)/2+1  =48
+        # （48 - 3 +2）/1+1 = 48
+        self.conv2_decomnet = torch.nn.Sequential()
+        self.conv2_decomnet.add_module('max pool', torch.nn.MaxPool2d(2, stride=2))
+        self.conv2_decomnet.add_module('conv2', torch.nn.Conv2d(32, 64, 3, stride=1, padding=1))
+        self.conv2_decomnet.add_module('relu2', torch.nn.LeakyReLU(negative_slope=0.2, inplace=True))
+        # 24
+        # 24
+        self.conv3_decomnet = torch.nn.Sequential()
+        self.conv3_decomnet.add_module('max pool2', torch.nn.MaxPool2d(2, stride=2))
+        self.conv3_decomnet.add_module('conv3', torch.nn.Conv2d(64, 128, 3, 1, 1))
+        self.conv3_decomnet.add_module('relu3', torch.nn.LeakyReLU(negative_slope=0.2, inplace=True))
+        # (input - 1)*2 -0+2 = 2*input
+        # (input-1)*stride -2*padding +kernel_size = output
+        self.deconv1 = torch.nn.ConvTranspose2d(in_channels=128, out_channels=64, kernel_size=2, stride=2)  # 反卷积
+        # input
+        self.conv4 = torch.nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1)
+        self.conv4_relu = torch.nn.LeakyReLU(negative_slope=0.2, inplace=True)
+        # 2 *input
+        self.deconv2 = torch.nn.ConvTranspose2d(64, 32, 2, 2)
+        # input
+        self.conv5_decomnet = torch.nn.Sequential()
+        self.conv5_decomnet.add_module('conv5', torch.nn.Conv2d(64, 32, 3, 1, 1))
+        self.conv5_decomnet.add_module('relu5', torch.nn.LeakyReLU(negative_slope=0.2, inplace=True))
+        # input-1 +1 = input
+        self.conv6 = torch.nn.Conv2d(32, 3, 1, 1, 0)
+        self.reflectance = torch.nn.Sigmoid()
+        # input
+        self.conv_i_1_decom = torch.nn.Sequential()
+        self.conv_i_1_decom.add_module('conv_i_1', torch.nn.Conv2d(32, 32, 3, 1, 1))
+        self.conv_i_1_decom.add_module('relu_i_1', torch.nn.LeakyReLU(negative_slope=0.2, inplace=True))
+        # input
+        self.conv_i_3 = torch.nn.Conv2d(64, 1, 1)  # 这里跟论文中的卷积核3不同，结果更好
+        self.illumination = torch.nn.Sigmoid()
+
+    def forward(self, input_data):
+        conv1_output = self.conv1_decomnet(input_data)  # (96 - 3 + 2)/1 +1 = 96
+        conv2_output = self.conv2_decomnet(conv1_output)  # 48
+        conv3_output = self.conv3_decomnet(conv2_output)  # 24
+        decom_up1 = self.deconv1(conv3_output)  # 48
+        decom_concat1 = torch.cat((conv2_output, decom_up1), 1)  # 48 通道翻倍
+        conv4_output_1 = self.conv4(decom_concat1)  # 48
+        conv4_output = self.conv4_relu(conv4_output_1)
+        decom_up2 = self.deconv2(conv4_output)  # 96
+        decom_concat2 = torch.cat((conv1_output, decom_up2), 1)  # 96
+        conv5_output = self.conv5_decomnet(decom_concat2)  # 96
+        conv6_output = self.conv6(conv5_output)  # 96
+        decom_reflectance = self.reflectance(conv6_output)  # 反射率
+        conv_i_1 = self.conv_i_1_decom(conv1_output)    # 96
+        conv_i_2 = torch.cat((conv_i_1, conv5_output), 1)  # 96
+        conv_i_3 = self.conv_i_3(conv_i_2)  # 96
+        decom_illumination = self.illumination(conv_i_3)  # 96
+        return decom_reflectance, decom_illumination
+
+
+class adjust_net(nn.Module):
+    def __init__(self):
+        super(adjust_net, self).__init__()
+        self.conv1 = nn.Conv2d(4, 32, 3, padding=1, padding_mode='replicate')
+        # (input - 3+2)/2 +1 =input/2
+        self.conv2_1 = nn.Sequential()
+        self.conv2_1.add_module('conv', nn.Conv2d(4, 32, kernel_size=3, stride=2, padding=1, padding_mode='replicate'))
+        self.conv2_1.add_module('relu', nn.LeakyReLU(True))
+
+        self.conv2_2 = nn.Sequential()
+        self.conv2_2.add_module('conv', nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1, padding_mode='replicate'))
+        self.conv2_2.add_module('relu', nn.LeakyReLU(True))
+
+        self.conv2_3 = nn.Sequential()
+        self.conv2_3.add_module('conv', nn.Conv2d(32, 32, kernel_size=3, stride=2, padding=1, padding_mode='replicate'))
+        self.conv2_3.add_module('relu', nn.LeakyReLU(True))
+        # (input - 3 + 2)/1 +1 = input
+        self.deconv1 = nn.Sequential()
+        self.deconv1.add_module('conv', nn.Conv2d(64, 32, 3, 1, padding=1, padding_mode='replicate'))
+        self.deconv1.add_module('relu', nn.LeakyReLU(True))
+
+        self.deconv2 = nn.Sequential()
+        self.deconv2.add_module('conv', nn.Conv2d(64, 32, 3, 1, padding=1, padding_mode='replicate'))
+        self.deconv2.add_module('relu', nn.LeakyReLU(True))
+
+        self.deconv3 = nn.Sequential()
+        self.deconv3.add_module('conv', nn.Conv2d(64, 32, 3, 1, padding=1, padding_mode='replicate'))
+        self.deconv3.add_module('relu', nn.LeakyReLU(True))
+        # (input - 1 + 2)/1 + 1 = input + 2
+        self.conv3 = nn.Conv2d(32 * 3, 32, kernel_size=1,
+                               padding=1, padding_mode='replicate')
+        # (input - 3)/1+1 = input-2
+        self.conv4 = nn.Conv2d(32, 1, kernel_size=3, padding=0)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, reflect_data, illumination_data):
+        image_data = torch.cat((reflect_data, illumination_data), dim=1)
+        output1 = self.conv1(image_data)
+        # 卷积
+        output2 = self.conv2_1(image_data)
+        output3 = self.conv2_2(output2)
+        output4 = self.conv2_3(output3)
+        # 对数据进行上采样
+        output = F.interpolate(output4, size=(output3.shape[2], output3.shape[3]))  # 对数据进行上采样后与output3相加形成残差
+        # 第一层残差
+        deconv1_input = torch.cat((output, output3), dim=1)
+        deconv1 = self.deconv1(deconv1_input)
+        # 第二层残差
+        output = F.interpolate(deconv1, size=(output2.shape[2], output2.shape[3]))  # 对数据进行上采样后与output3相加形成残差
+        deconv2_input = torch.cat((output, output2), dim=1)
+        deconv2 = self.deconv2(deconv2_input)
+        # 第三层残差
+        output = F.interpolate(deconv2, size=(output1.shape[2], output1.shape[3]))  # 对数据进行上采样后与output3相加形成残差
+        deconv3_input = torch.cat((output, output1), dim=1)
+        deconv3 = self.deconv2(deconv3_input)
+        # 把deconv1和deconv2上采样到跟输入一样的维度
+        deconv1_resize = F.interpolate(deconv1, size=(reflect_data.shape[2], reflect_data.shape[3]))
+        deconv2_resize = F.interpolate(deconv2, size=(reflect_data.shape[2], reflect_data.shape[3]))
+        # 把他们与deconv3进行连接
+        conv3_input = torch.cat((deconv1_resize, deconv2_resize, deconv3), dim=1)
+        conv3 = self.conv3(conv3_input)
+        out = self.conv4(conv3)
+        out = self.sigmoid(out)
+        return out
