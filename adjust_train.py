@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from utils import *
 
-epoch = 120  # 迭代次数
+epoch = 120  
 batch_size = 16
 patch_size = 96
 learning_rate = 0.001
@@ -49,16 +49,13 @@ def adjust_grad_loss(input_i_low, input_i_high):
     :return: 损失值
     """
     x_one = torch.sub(gradient(input_i_low, 'x'), gradient(input_i_high, 'x'))
-    y_one = torch.sub(gradient(input_i_low, 'y'), gradient(input_i_high, 'y'))  # 分别对y和x轴求梯度后相减
+    y_one = torch.sub(gradient(input_i_low, 'y'), gradient(input_i_high, 'y'))  
     x_loss = torch.pow(x_one, 2)
-    y_loss = torch.pow(y_one, 2)  # L2范数
-    all_grad_loss = torch.mean(x_loss + y_loss)  # 总梯度损失值
+    y_loss = torch.pow(y_one, 2)  
+    all_grad_loss = torch.mean(x_loss + y_loss)  
     return all_grad_loss
 
-# 为什么要这样构建损失函数
-# 加进去的：调整后的光照图应该跟正常光照的光照图很接近
-# 光照图的平滑： 光照图应该是平滑的
-# 重构损失： 调整后的光照图和低光照图像的反射图应该能重构出跟高光照图像很接近的图像
+
 class adjust_loss(nn.Module):
     def __init__(self):
         super(adjust_loss, self).__init__()
@@ -69,7 +66,6 @@ class adjust_loss(nn.Module):
         L_rec = torch.mean(torch.abs(R_low_data*I_adjust_3 - high_img))
         # 光照图的光滑
         L_smooth = smooth(I_adjust, R_low_data)
-        # 加进去的
         # 目标图像和输入的光照图像各自的梯度绝对值相减后的L2范数作为loss的组成部分
         grad_loss = adjust_grad_loss(I_adjust, input_high_i)
         # 目标值 - 输入的光照图的L2范数作为loss的组成部分
