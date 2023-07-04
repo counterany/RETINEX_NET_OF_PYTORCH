@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 def load_image(img):
     img = np.array(img, dtype='float32') / 255.0
-    # 归一化
     img = np.float32((img - np.min(img)) / np.maximum((np.max(img) - np.min(img)), 0.001))
     return img
 
