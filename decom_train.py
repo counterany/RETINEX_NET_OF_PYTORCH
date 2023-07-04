@@ -3,7 +3,7 @@ import torch
 from model import *
 from utils import *
 
-epoch = 1000  # 迭代次数
+epoch = 1000  
 batch_size = 16
 patch_size = 96
 learning_rate = 0.001
@@ -62,9 +62,6 @@ def mutual_i_loss(input_I_low, input_I_high):
 
 
 """读取处理数据"""
-
-#  为什么要对数据进行这样的处理？
-# 这样处理可以减少网络的计算量（截取一小块）；可以增加样本的多样性和随机性（对数据进行随机翻转处理）
 class deal_data(Dataset):
     def __init__(self):
         self.low_image = read_load_image("G:\\junior\\junior_next_term\\professional  introduction\\my_kind"
@@ -89,11 +86,7 @@ class deal_data(Dataset):
     def __len__(self):
         return self.len
 
-# 为什么这样构建损失函数？
-# 1）重构损失：因为分解后的反射图和光照图重新构建出的照片应该跟原照片一样
-# 2）反射一致性：因为相同的物体本身的颜色啊，形状啊什么的应该是一定的，所以高光照图像和低光照图像的反射图应该是一样的
-# 3）光照的平滑性；就是光照图应该是分段平滑的
-# 4）光照图应该跟输入图像去除颜色后的灰度图结构啥的相互一致
+
 class decom_loss(nn.Module):
     def __init__(self):
         super(decom_loss, self).__init__()
@@ -107,7 +100,7 @@ class decom_loss(nn.Module):
         # 反射一致性
         L_ir = torch.mean(torch.abs(R_low - R_high))
         L1 = torch.mean(torch.abs(R_high * I_low_3 - low_img)) + torch.mean(torch.abs(R_low * I_high_3 - high_img))
-        # 光照图的平滑，这里用的约束为两个光照图各自的梯度去除以它们梯度最大值后取绝对值相加
+        # 光照图的平滑
         I_mutual_loss = mutual_i_loss(I_low_data, I_high_data)  # 光照图的平滑损失值
         # 4） 相互一致性，即光照图和输入的一致性
         I_input_mutual_loss_low = mutual_consistency_loss(I_low_data, low_img)
@@ -143,8 +136,6 @@ for e in range(epoch):
         param_group['lr'] = learning_rate
     for i, data in enumerate(train_data):
         train_low, train_high = data
-        # 为什么做这样的维度转换？
-        # 因为cv2读取的时候，通道channel是放在最后的，但是网络要求通道放在第二
         train_low = train_low.permute([0, 3, 1, 2]).cuda()
         train_high = train_high.permute([0, 3, 1, 2]).cuda()
         # 把数据输入网络
